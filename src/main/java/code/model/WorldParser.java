@@ -1,26 +1,25 @@
 package code.model;
 
-import java.io.IOException;
 import java.nio.file.*;
+import java.io.IOException;
 import java.util.*;
 
 /**
- * Simple .world parser. Syntax (line based):
- *
+ * .world parser supporting:
  * GRID W H
  * STORE x y
  * DEST x y
  * AGENT id x y
- * EDGE x1 y1 x2 y2 cost        (directed)
+ * EDGE x1 y1 x2 y2 cost
  * UNDIRECTED_EDGE x1 y1 x2 y2 cost
- * BLOCK x1 y1 x2 y2            (equivalent to EDGE ... cost 0 both directions)
+ * BLOCK x1 y1 x2 y2
  * TUNNEL x1 y1 x2 y2
  *
- * Lines starting with # are comments.
+ * Comments start with #
  */
 public class WorldParser {
     public static Grid parse(String path) throws IOException {
-        List<String> lines = Files.readAllLines(Paths.get(path));
+        List<String> lines = Files.readAllLines(Path.of(path));
         Grid grid = null;
         for(String raw : lines){
             String line = raw.trim();
@@ -29,9 +28,7 @@ public class WorldParser {
             String cmd = tok[0].toUpperCase();
             switch(cmd){
                 case "GRID":
-                    int w = Integer.parseInt(tok[1]);
-                    int h = Integer.parseInt(tok[2]);
-                    grid = new Grid(w,h);
+                    grid = new Grid(Integer.parseInt(tok[1]), Integer.parseInt(tok[2]));
                     break;
                 case "STORE":
                     grid.stores.add(new Position(Integer.parseInt(tok[1]), Integer.parseInt(tok[2])));
@@ -70,7 +67,7 @@ public class WorldParser {
                     System.err.println("Unknown directive: " + cmd);
             }
         }
-        if(grid==null) throw new IllegalArgumentException("World file must begin with GRID W H");
+        if(grid == null) throw new IllegalArgumentException("World file must start with GRID W H");
         return grid;
     }
 }

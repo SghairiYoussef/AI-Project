@@ -4,42 +4,27 @@ import code.model.*;
 import javax.swing.*;
 import javax.swing.Timer;
 import java.awt.*;
-import java.awt.event.ActionEvent;
 import java.util.*;
 import java.util.List;
 
 /**
- * Improved Swing visualizer for 25x25 grids and single-agent step-by-step mode.
+ * Swing visualizer: sequential replay and simultaneous animation.
  */
 public class SwingVisualizer extends JPanel {
-
     private final Grid grid;
     private final Map<String, Color> agentColor = new HashMap<>();
-    private final Map<String, List<Position>> routes = new HashMap<>();
+    private final Map<String, List<Position>> routes = new LinkedHashMap<>();
     private final Map<String, Integer> indices = new HashMap<>();
-
-    private int cellSize;
+    private final int cellSize;
 
     public SwingVisualizer(Grid g){
         this.grid = g;
-
-        // Auto compute cell size so the full grid fits on screen
-        int maxDim = Math.max(grid.width, grid.height);
-        this.cellSize = Math.max(20, 600 / maxDim);
-
-        setPreferredSize(new Dimension(grid.width * cellSize, grid.height * cellSize));
-
-        // Assign unique colors to agents
-        Color[] palette = {
-                Color.RED, Color.BLUE, Color.MAGENTA,
-                Color.ORANGE, Color.CYAN, Color.GREEN.darker(),
-                Color.PINK, Color.YELLOW, Color.GRAY
-        };
+        int maxDim = Math.max(g.width, g.height);
+        this.cellSize = Math.max(20, 700 / maxDim);
+        setPreferredSize(new Dimension(g.width * cellSize, g.height * cellSize));
+        Color[] palette = {Color.RED, Color.BLUE, Color.MAGENTA, Color.ORANGE, Color.CYAN, Color.GREEN.darker(), Color.PINK, Color.YELLOW, Color.GRAY};
         int i = 0;
-        for(Agent a : g.agents){
-            agentColor.put(a.id, palette[i % palette.length]);
-            i++;
-        }
+        for(Agent a : g.agents){ agentColor.put(a.id, palette[i % palette.length]); i++; }
     }
 
     public void setRoute(Agent agent, List<Position> route){
@@ -47,160 +32,168 @@ public class SwingVisualizer extends JPanel {
         indices.put(agent.id, 0);
     }
 
-    /** Animate all agents simultaneously */
-    public void startAnimation(int delayMs){
+    public void startSimultaneous(int delayMs){
         Timer timer = new Timer(delayMs, e -> {
             boolean any = false;
-            for(String id : routes.keySet()){
-                int idx = indices.get(id);
+            for(String id : new ArrayList<>(routes.keySet())){
+                int idx = indices.getOrDefault(id, 0);
                 List<Position> r = routes.get(id);
-                if(idx < r.size() - 1){
-                    indices.put(id, idx + 1);
-                    any = true;
-                }
+                if(idx < r.size()-1){ indices.put(id, idx+1); any = true; }
             }
             repaint();
-            if(!any){
-                ((Timer)e.getSource()).stop();
-            }
+            if(!any) ((Timer)e.getSource()).stop();
         });
         timer.start();
     }
 
-    /** NEW: Animate each agent one at a time */
-    public void startAnimationSequential(int delayMs){
-        java.util.List<String> agentOrder = new ArrayList<>(routes.keySet());
-
-        Timer[] timers = new Timer[1]; // work-around to modify inside lambda
-
-        timers[0] = new Timer(delayMs, new AbstractAction() {
-            int agentIndex = 0;
-
-            @Override
-            public void actionPerformed(ActionEvent e) {
-
-                if(agentIndex >= agentOrder.size()){
-                    timers[0].stop();
-                    return;
-                }
-
-                String currentAgent = agentOrder.get(agentIndex);
-                List<Position> r = routes.get(currentAgent);
-                int idx = indices.get(currentAgent);
-
-                if(idx < r.size() - 1){
-                    indices.put(currentAgent, idx + 1);
+    public void startSequential(int delayMs){
+        List<String> order = new ArrayList<>(routes.keySet());
+        Timer[] tRef = new Timer[1];
+        tRef[0] = new Timer(delayMs, e -> {
+            boolean allDone = true;
+            for(String id : order){
+                int idx = indices.getOrDefault(id, 0);
+                List<Position> r = routes.get(id);
+                if(idx < r.size()-1){
+                    indices.put(id, idx+1);
                     repaint();
-                } else {
-                    agentIndex++;
+                    allDone = false;
+                    break; // animate only one agent at a time
                 }
             }
+            if(allDone) tRef[0].stop();
         });
-
-        timers[0].start();
+        tRef[0].start();
     }
-
 
     @Override protected void paintComponent(Graphics g0){
         super.paintComponent(g0);
         Graphics2D g = (Graphics2D) g0;
-
-        // smooth graphics
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 
-        drawGrid(g);
-        drawBlockedEdges(g);
-        drawAgents(g);
-    }
-
-    /** Draw the background grid and labels */
-    private void drawGrid(Graphics2D g){
-        for(int y = 0; y < grid.height; y++){
-            for(int x = 0; x < grid.width; x++){
-                int sx = x * cellSize;
-                int sy = y * cellSize;
-
-                Position p = new Position(x, y);
-
+        // grid cells
+        for(int y=0;y<grid.height;y++){
+            for(int x=0;x<grid.width;x++){
+                int sx = x*cellSize, sy = y*cellSize;
+                Position p = new Position(x,y);
                 if(grid.stores.contains(p)) g.setColor(new Color(80,130,230));
                 else if(grid.destinations.contains(p)) g.setColor(new Color(60,200,100));
                 else g.setColor(Color.WHITE);
-
                 g.fillRect(sx, sy, cellSize, cellSize);
-
                 g.setColor(Color.LIGHT_GRAY);
                 g.drawRect(sx, sy, cellSize, cellSize);
             }
         }
-    }
 
-    /** Blocked edges appear as thick black lines */
-    private void drawBlockedEdges(Graphics2D g){
+        // blocked edges
         g.setColor(Color.BLACK);
-        g.setStroke(new BasicStroke(4f));
-
-        for(int y=0; y<grid.height; y++){
-            for(int x=0; x<grid.width; x++){
-                Position p = new Position(x,y);
-
-                // Check neighbors for blocked edges
-                Position[] neigh = {
-                        new Position(x+1,y),
-                        new Position(x,y+1)
-                };
-
-                for(Position n : neigh){
-                    if(!grid.inBounds(n)) continue;
-
-                    int cost = grid.moveCost(p, n);
-
-                    if(cost == Integer.MAX_VALUE/4 || cost == 0){
-                        int cx1 = x*cellSize + cellSize/2;
-                        int cy1 = y*cellSize + cellSize/2;
-                        int cx2 = n.x*cellSize + cellSize/2;
-                        int cy2 = n.y*cellSize + cellSize/2;
-                        g.drawLine(cx1, cy1, cx2, cy2);
-                    }
-                }
+        g.setStroke(new BasicStroke(3f));
+        Map<String,Integer> edges = grid.getEdgeCostMap();
+        for(Map.Entry<String,Integer> e : edges.entrySet()){
+            if(e.getValue() == 0){
+                String k = e.getKey();
+                String[] parts = k.split(":");
+                String[] a = parts[0].split(",");
+                String[] b = parts[1].split(",");
+                int x1 = Integer.parseInt(a[0]), y1 = Integer.parseInt(a[1]);
+                int x2 = Integer.parseInt(b[0]), y2 = Integer.parseInt(b[1]);
+                int cx1 = x1*cellSize + cellSize/2, cy1 = y1*cellSize + cellSize/2;
+                int cx2 = x2*cellSize + cellSize/2, cy2 = y2*cellSize + cellSize/2;
+                g.drawLine(cx1, cy1, cx2, cy2);
             }
         }
-    }
 
-    /** Draw agents (circles + text) */
-    private void drawAgents(Graphics2D g){
+        // tunnels dashed
+        g.setColor(Color.DARK_GRAY);
+        float[] dash = {6f};
+        for(Position[] t : grid.getTunnels()){
+            int cx1 = t[0].x*cellSize + cellSize/2, cy1 = t[0].y*cellSize + cellSize/2;
+            int cx2 = t[1].x*cellSize + cellSize/2, cy2 = t[1].y*cellSize + cellSize/2;
+            g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1f, dash, 0f));
+            g.drawLine(cx1, cy1, cx2, cy2);
+        }
+
+        // agents
         for(Agent a : grid.agents){
             List<Position> r = routes.get(a.id);
             int idx = indices.getOrDefault(a.id, 0);
-
-            Position cur = (r == null || r.isEmpty()) ? a.pos : r.get(Math.min(idx, r.size()-1));
-
-            int rx = cur.x * cellSize + 5;
-            int ry = cur.y * cellSize + 5;
-
-            g.setColor(agentColor.get(a.id));
-            g.fillOval(rx, ry, cellSize-10, cellSize-10);
-
-            g.setColor(Color.BLACK);
-            g.drawString(a.id, rx + cellSize/4, ry + cellSize/2);
+            Position cur;
+            if(r==null || r.isEmpty()) cur = a.pos;
+            else cur = r.get(Math.min(idx, r.size()-1));
+            Color col = agentColor.getOrDefault(a.id, Color.RED);
+            g.setColor(col);
+            int rx = cur.x * cellSize + Math.max(6, cellSize/8), ry = cur.y * cellSize + Math.max(6, cellSize/8);
+            g.fillOval(rx, ry, Math.max(8, cellSize - 2*(cellSize/8)), Math.max(8, cellSize - 2*(cellSize/8)));
+            g.setColor(Color.WHITE);
+            g.drawString(a.id, rx+4, ry+12);
         }
     }
 
-    public static void showFrame(Grid grid, Map<Agent,List<Position>> routes, int delayMs, boolean sequential){
-        JFrame frame = new JFrame("Grid Visualizer");
-
+    public static void showFrame(Grid grid, Map<Agent, List<Position>> plannedRoutes, int delayMs, boolean sequential){
         SwingVisualizer vis = new SwingVisualizer(grid);
-
-        for(Map.Entry<Agent,List<Position>> e : routes.entrySet()){
-            vis.setRoute(e.getKey(), e.getValue());
+        for(Map.Entry<Agent,List<Position>> e : plannedRoutes.entrySet()) vis.setRoute(e.getKey(), new ArrayList<>(e.getValue()));
+        // compute conflict-free schedules
+        Map<String, List<Position>> sched = vis.buildConflictFreeSchedules();
+        Map<Agent, List<Position>> finalMap = new LinkedHashMap<>();
+        for(Agent a : grid.agents){
+            List<Position> r = sched.get(a.id);
+            if(r==null) r = plannedRoutes.getOrDefault(a, Collections.singletonList(a.pos));
+            finalMap.put(a, r);
         }
 
-        frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-        frame.add(vis);
-        frame.pack();
-        frame.setLocationRelativeTo(null);
-        frame.setVisible(true);
+        JFrame f = new JFrame("Delivery Visualizer");
+        f.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+        f.add(vis);
+        for(Map.Entry<Agent,List<Position>> e : finalMap.entrySet()) vis.setRoute(e.getKey(), e.getValue());
+        f.pack();
+        f.setLocationRelativeTo(null);
+        f.setVisible(true);
+        if(sequential) vis.startSequential(delayMs);
+        else vis.startSimultaneous(delayMs);
+    }
 
-        if(sequential) vis.startAnimationSequential(delayMs);
-        else vis.startAnimation(delayMs);
+    // schedule builder copied to be accessible here
+    public Map<String, List<Position>> buildConflictFreeSchedules(){
+        Map<String, List<Position>> sched = new LinkedHashMap<>();
+        for(String id : routes.keySet()){
+            List<Position> r = routes.get(id);
+            if(r == null) r = new ArrayList<>();
+            sched.put(id, new ArrayList<>(r));
+        }
+        // ensure non-empty
+        for(String id : sched.keySet()){
+            List<Position> r = sched.get(id);
+            if(r==null || r.isEmpty()){
+                Position start = null;
+                for(Agent a : grid.agents) if(a.id.equals(id)) start = a.pos;
+                if(start != null){ r = new ArrayList<>(); r.add(start); sched.put(id, r); }
+            }
+        }
+        Map<Integer, Map<Position, String>> reserved = new HashMap<>();
+        boolean changed = true; int pass=0;
+        while(changed && pass<500){
+            changed = false; reserved.clear();
+            int maxT = 0;
+            for(List<Position> r : sched.values()) maxT = Math.max(maxT, r.size());
+            for(int t=0;t<maxT;t++){
+                for(String aid : new ArrayList<>(sched.keySet())){
+                    List<Position> r = sched.get(aid);
+                    Position p = (t < r.size()) ? r.get(t) : r.get(r.size()-1);
+                    Map<Position,String> atT = reserved.computeIfAbsent(t, k->new HashMap<>());
+                    if(atT.containsKey(p)){
+                        int insertPos = Math.min(t, r.size()-1);
+                        Position prev = r.get(Math.max(0, insertPos-1));
+                        r.add(insertPos, prev);
+                        changed = true;
+                        break;
+                    } else {
+                        atT.put(p, aid);
+                    }
+                }
+                if(changed) break;
+            }
+            pass++;
+        }
+        return sched;
     }
 }
