@@ -5,9 +5,6 @@ import code.model.Position;
 import code.search.*;
 import java.util.*;
 
-/**
- * DeliverySearch: inner solve that returns SearchResult and instrumented solveWithStats.
- */
 public class DeliverySearch {
 
     public static SearchResult solveInternal(Grid grid, Position start, Position goal, String strat){
@@ -56,23 +53,32 @@ public class DeliverySearch {
     }
 
     public static SearchStats solveWithStats(Grid grid, Position start, Position goal, String strat){
-        long memBefore = usedMemoryKB();
-        long t0 = System.currentTimeMillis();
+        long memBefore = usedMemoryBytes();
+        long t0 = System.nanoTime(); // ← HIGH-RESOLUTION
 
         SearchResult r = solveInternal(grid, start, goal, strat);
 
-        long t1 = System.currentTimeMillis();
-        long memAfter = usedMemoryKB();
+        long t1 = System.nanoTime(); // ← HIGH-RESOLUTION
+        long memAfter = usedMemoryBytes();
 
         boolean success = r != null && r.plan != null;
         int cost = success ? r.cost : Integer.MAX_VALUE;
-        int expanded = (r != null) ? r.expanded : Integer.MAX_VALUE;
-        long timeMs = t1 - t0;
-        long memKb = Math.max(0L, memAfter - memBefore);
+        int expanded = (r != null) ? r.expanded : 0;
+        long timeNanos = t1 - t0;
+        long memBytes = Math.max(0L, memAfter - memBefore);
         List<Position> route = success ? r.route : Collections.emptyList();
 
-        return new SearchStats(success, cost, expanded, timeMs, memKb, route);
+        List<String> actions = Collections.emptyList();
+        if (success && r.plan != null && !r.plan.isEmpty()) {
+            actions = Arrays.asList(r.plan.split(","));
+        }
+
+        return new SearchStats(success, cost, expanded, timeNanos, memBytes, route, actions);
     }
 
-    private static long usedMemoryKB(){ Runtime rt = Runtime.getRuntime(); return (rt.totalMemory() - rt.freeMemory()) / 1024; }
+    // Replace usedMemoryKB() with:
+    private static long usedMemoryBytes() {
+        Runtime rt = Runtime.getRuntime();
+        return rt.totalMemory() - rt.freeMemory();
+    }
 }
