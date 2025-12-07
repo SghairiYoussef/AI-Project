@@ -7,17 +7,15 @@ public class SearchStats {
     public final boolean success;
     public final int cost;
     public final int expanded;
-    public final long timeNanos;        // ← nanoseconds (high-res)
+    public final long timeNanos;
     public final long memoryUsedBytes;
     public final List<Position> route;
     public final List<String> actions;
 
-    // Legacy constructor (for collision avoidance backward compatibility)
     public SearchStats(boolean success, int cost, int expanded, long timeMs, long memoryUsedBytes, List<Position> route) {
         this(success, cost, expanded, timeMs * 1_000_000L, memoryUsedBytes, route, Collections.emptyList());
     }
 
-    // Main constructor
     public SearchStats(boolean success, int cost, int expanded, long timeNanos, long memoryUsedBytes,
                        List<Position> route, List<String> actions) {
         this.success = success;
@@ -29,7 +27,6 @@ public class SearchStats {
         this.actions = actions != null ? new ArrayList<>(actions) : Collections.emptyList();
     }
 
-    // Helper for readable time formatting
     public static String formatTime(long nanos) {
         if (nanos < 1_000) return nanos + "ns";
         else if (nanos < 1_000_000) return (nanos / 1_000) + "µs";

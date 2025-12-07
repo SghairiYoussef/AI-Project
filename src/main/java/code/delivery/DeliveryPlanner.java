@@ -4,29 +4,29 @@ import code.model.*;
 import java.util.*;
 
 /**
- * DeliveryPlanner (Option 3: nearest destination per store) with destination reservation.
- *
- * For each remaining store:
- *  - determine nearest available destination (skip reserved ones)
- *  - for each agent evaluate best strategy for:
- *       agent -> store  AND  store -> destination
- *  - choose best agent/store pair (combined metrics)
- *  - append both legs to agent route
- *  - update agent position to the destination
- *  - mark destination as reserved (cannot be used again)
- *
- * After all assignments: apply collision avoidance (wait insertions).
+ * DeliveryPlanner - Plans delivery routes for multiple agents
+ * 
+ * SPECIFICATION COMPLIANCE:
+ * - Plans which trucks deliver which products
+ * - Each truck returns to store after delivery before next assignment
+ * - Coordinates overall delivery strategy
  */
 public class DeliveryPlanner {
-
-    private static final String[] STRATEGIES = {"BFS","DFS","UCS","IDS","GREEDY","ASTAR"};
 
     public static class Assignment {
         public final Agent agent;
         public final List<Position> route;
-        public final String strategy; // summary
+        public final String strategy;
         public final SearchStats stats;
-        public Assignment(Agent a, List<Position> r, String strat, SearchStats st){ this.agent=a; this.route=r; this.strategy=strat; this.stats=st; }
+        public final int deliveriesCompleted;
+        
+        public Assignment(Agent a, List<Position> r, String strat, SearchStats st, int deliveries){ 
+            this.agent=a; 
+            this.route=r; 
+            this.strategy=strat; 
+            this.stats=st; 
+            this.deliveriesCompleted = deliveries;
+        }
         public String strategySummary(){ return strategy + " | stats=" + stats; }
     }
 
@@ -40,19 +40,20 @@ public class DeliveryPlanner {
         SearchStats statsToDest;
         List<Position> routeToStore;
         List<Position> routeToDest;
+        int agentDeliveryCount;
 
-        Candidate(Position store, Position dest, Agent agentSnapshot){
-            this.store = store; this.dest = dest; this.agentSnapshot = agentSnapshot;
+        Candidate(Position store, Position dest, Agent agentSnapshot, int deliveryCount){
+            this.store = store; 
+            this.dest = dest; 
+            this.agentSnapshot = agentSnapshot;
+            this.agentDeliveryCount = deliveryCount;
         }
 
         long combinedExpanded(){ return (long)statsToStore.expanded + (long)statsToDest.expanded; }
-        long combinedTime(){ return statsToStore.timeNanos + statsToDest.timeNanos; }
         long combinedMem(){ return statsToStore.memoryUsedBytes + statsToDest.memoryUsedBytes; }
+        int totalCost(){ return statsToStore.cost + statsToDest.cost; }
     }
 
-    /**
-     * Get nearest available destination for a store (skip reservedDest).
-     */
     private static Position nearestAvailableDestination(Grid grid, Position store, Set<Position> reservedDest){
         Position best = null;
         int bestD = Integer.MAX_VALUE;
@@ -67,34 +68,41 @@ public class DeliveryPlanner {
     public static List<Assignment> planMultiDelivery(Grid grid){
         // Agent state tracking
         Map<String, Agent> agentSnap = new LinkedHashMap<>();
+        Map<String, Position> currentStoreLocation = new LinkedHashMap<>();  // Track which store agent is at
         Map<String, List<Position>> assigned = new LinkedHashMap<>();
+        Map<String, Integer> deliveryCount = new HashMap<>();
+        
         for(Agent ag : grid.agents){
             agentSnap.put(ag.id, new Agent(ag.id, new Position(ag.pos.x, ag.pos.y)));
+            // Initially, each agent is at their starting store
+            currentStoreLocation.put(ag.id, new Position(ag.pos.x, ag.pos.y));
             assigned.put(ag.id, new ArrayList<>(Collections.singletonList(ag.pos)));
+            deliveryCount.put(ag.id, 0);
         }
 
-        // Stats aggregation for final summary
+        // Stats aggregation
         Map<String, Integer> totalCost = new HashMap<>();
         Map<String, Integer> totalExpanded = new HashMap<>();
         Map<String, Long> totalTimeNanos = new HashMap<>();
         Map<String, Long> totalMemoryKB = new HashMap<>();
+        Map<String, List<String>> strategiesUsed = new HashMap<>();
+        
         for (Agent ag : grid.agents) {
             totalCost.put(ag.id, 0);
             totalExpanded.put(ag.id, 0);
             totalTimeNanos.put(ag.id, 0L);
             totalMemoryKB.put(ag.id, 0L);
+            strategiesUsed.put(ag.id, new ArrayList<>());
         }
 
-        List<Position> remainingStores = new ArrayList<>(grid.stores);
         Set<Position> reservedDestinations = new HashSet<>();
 
-        while(!remainingStores.isEmpty()){
+        // Continue while there are unreserved destinations
+        while(reservedDestinations.size() < grid.destinations.size()){
             Candidate best = null;
-            String loggingAgentId = null;
-            Position loggingStore = null, loggingDest = null;
-            String chosenStoreStrat = null, chosenDestStrat = null;
 
-            for(Position store : new ArrayList<>(remainingStores)){
+            // Check all stores for each delivery round
+            for(Position store : grid.stores){
                 Position dest = nearestAvailableDestination(grid, store, reservedDestinations);
                 if(dest == null) continue;
 
@@ -102,8 +110,11 @@ public class DeliveryPlanner {
                     Agent snapshot = agentSnap.get(ag.id);
 
                     // Leg 1: agent -> store
-                    SearchStats bestStoreStats = null; String bestStoreStrat = null;
-                    for(String s : STRATEGIES){
+                    // Test all strategies and select best
+                    String[] strategies = {"BFS","DFS","UCS","IDS","GREEDY","ASTAR"};
+                    SearchStats bestStoreStats = null; 
+                    String bestStoreStrat = null;
+                    for(String s : strategies){
                         SearchStats st = DeliverySearch.solveWithStats(grid, snapshot.pos, store, s);
                         if(!st.success) continue;
                         if(bestStoreStats == null || prefer(st, bestStoreStats)){
@@ -112,9 +123,9 @@ public class DeliveryPlanner {
                     }
                     if(bestStoreStats == null) continue;
 
-                    // Leg 2: store -> dest
-                    SearchStats bestDestStats = null; String bestDestStrat = null;
-                    for(String s : STRATEGIES){
+                    SearchStats bestDestStats = null; 
+                    String bestDestStrat = null;
+                    for(String s : strategies){
                         SearchStats st = DeliverySearch.solveWithStats(grid, store, dest, s);
                         if(!st.success) continue;
                         if(bestDestStats == null || prefer(st, bestDestStats)){
@@ -123,53 +134,23 @@ public class DeliveryPlanner {
                     }
                     if(bestDestStats == null) continue;
 
-                    Candidate c = new Candidate(store, dest, new Agent(snapshot.id, new Position(snapshot.pos.x, snapshot.pos.y)));
-                    c.stratToStore = bestStoreStrat; c.stratToDest = bestDestStrat;
-                    c.statsToStore = bestStoreStats; c.statsToDest = bestDestStats;
-                    c.routeToStore = bestStoreStats.route; c.routeToDest = bestDestStats.route;
+                    Candidate c = new Candidate(store, dest, 
+                        new Agent(snapshot.id, new Position(snapshot.pos.x, snapshot.pos.y)), 
+                        deliveryCount.get(ag.id));
+                    c.stratToStore = bestStoreStrat; 
+                    c.stratToDest = bestDestStrat;
+                    c.statsToStore = bestStoreStats; 
+                    c.statsToDest = bestDestStats;
+                    c.routeToStore = bestStoreStats.route; 
+                    c.routeToDest = bestDestStats.route;
 
                     if(best == null || combinedPrefer(c, best)) {
                         best = c;
-                        loggingAgentId = ag.id;
-                        loggingStore = store;
-                        loggingDest = dest;
-                        chosenStoreStrat = bestStoreStrat;
-                        chosenDestStrat = bestDestStrat;
                     }
                 }
             }
 
             if(best == null) break;
-
-            // === DETAILED LOGGING ===
-            System.out.println("\n🔍 Assignment Details for Agent " + loggingAgentId);
-            System.out.println("Task: " + best.agentSnapshot.pos + " → " + loggingStore + " → " + loggingDest);
-
-            System.out.println("\n➡️  Leg 1: Agent → Store");
-            System.out.printf("%-8s | %8s | %10s | %6s | %6s%n", "Algo", "Expanded", "Time", "Cost", "Steps");
-            for (String s : STRATEGIES) {
-                SearchStats st = DeliverySearch.solveWithStats(grid, best.agentSnapshot.pos, loggingStore, s);
-                if (st.success) {
-                    System.out.printf("%-8s | %8d | %10s | %6d | %6d%n",
-                            s, st.expanded, SearchStats.formatTime(st.timeNanos), st.cost, st.route.size() - 1);
-                } else {
-                    System.out.printf("%-8s | %8s | %10s | %6s | %6s%n", s, "—", "—", "—", "—");
-                }
-            }
-            System.out.println("✅ Chosen: " + chosenStoreStrat + " | Actions: " + best.statsToStore.actions);
-
-            System.out.println("\n➡️  Leg 2: Store → Destination");
-            System.out.printf("%-8s | %8s | %10s | %6s | %6s%n", "Algo", "Expanded", "Time", "Cost", "Steps");
-            for (String s : STRATEGIES) {
-                SearchStats st = DeliverySearch.solveWithStats(grid, loggingStore, loggingDest, s);
-                if (st.success) {
-                    System.out.printf("%-8s | %8d | %10s | %6d | %6d%n",
-                            s, st.expanded, SearchStats.formatTime(st.timeNanos), st.cost, st.route.size() - 1);
-                } else {
-                    System.out.printf("%-8s | %8s | %10s | %6s | %6s%n", s, "—", "—", "—", "—");
-                }
-            }
-            System.out.println("✅ Chosen: " + chosenDestStrat + " | Actions: " + best.statsToDest.actions);
 
             // Assign route
             String aid = best.agentSnapshot.id;
@@ -180,20 +161,20 @@ public class DeliveryPlanner {
             if(best.routeToDest != null && best.routeToDest.size() > 1){
                 for(int i=1;i<best.routeToDest.size();i++) current.add(best.routeToDest.get(i));
             }
-            agentSnap.get(aid).pos = best.dest;
+            
+            // ✅ SPECIFICATION FIX: Truck returns to store after delivery
+            deliveryCount.put(aid, deliveryCount.get(aid) + 1);
+            agentSnap.get(aid).pos = best.store;  // Return to store (not initial position)
+            currentStoreLocation.put(aid, best.store);
             reservedDestinations.add(best.dest);
-            remainingStores.remove(best.store);
 
             // Update aggregated stats
             totalCost.merge(aid, best.statsToStore.cost + best.statsToDest.cost, Integer::sum);
             totalExpanded.merge(aid, (int)best.combinedExpanded(), Integer::sum);
             totalTimeNanos.merge(aid, best.statsToStore.timeNanos + best.statsToDest.timeNanos, Long::sum);
             totalMemoryKB.merge(aid, best.combinedMem(), Long::sum);
-
-            System.out.println("📌 Final: " + best.store + " → " + best.dest + " assigned to " + aid +
-                    " using " + best.stratToStore + " + " + best.stratToDest +
-                    " (total expanded=" + best.combinedExpanded() +
-                    ", time=" + SearchStats.formatTime(best.statsToStore.timeNanos + best.statsToDest.timeNanos) + ")\n");
+            
+            strategiesUsed.get(aid).add(best.stratToStore + " + " + best.stratToDest);
         }
 
         // Collision avoidance
@@ -203,21 +184,180 @@ public class DeliveryPlanner {
         List<Assignment> out = new ArrayList<>();
         for(Agent ag : grid.agents){
             List<Position> r = safe.getOrDefault(ag.id, assigned.get(ag.id));
+            List<String> actions = extractActions(r, grid);
             SearchStats realStats = new SearchStats(
                     true,
                     totalCost.get(ag.id),
                     totalExpanded.get(ag.id),
                     totalTimeNanos.get(ag.id),
                     totalMemoryKB.get(ag.id),
-                    r
+                    r,
+                    actions
             );
-            out.add(new Assignment(new Agent(ag.id, ag.pos), r, "AUTO", realStats));
+            String strategyStr = strategiesUsed.getOrDefault(ag.id, new ArrayList<>()).isEmpty() 
+                ? "AUTO" 
+                : String.join(" | ", strategiesUsed.get(ag.id));
+            out.add(new Assignment(new Agent(ag.id, ag.pos), r, strategyStr, realStats, deliveryCount.get(ag.id)));
         }
 
         return out;
     }
+    
+    /**
+     * ✅ SPECIFICATION COMPLIANCE: Plan with specific strategy
+     * Allows strategy to be passed from plan() method
+     */
+    public static List<Assignment> planMultiDeliveryWithStrategy(Grid grid, String strategy) {
+        if ("AUTO".equals(strategy)) {
+            return planMultiDelivery(grid);  // Use automatic strategy selection
+        }
+        
+        // Use specified strategy for all searches
+        return planMultiDeliveryFixed(grid, strategy);
+    }
+    
+    /**
+     * Plan multi-delivery using a fixed strategy (not AUTO)
+     */
+    private static List<Assignment> planMultiDeliveryFixed(Grid grid, String strategy) {
+        Map<String, Agent> agentSnap = new LinkedHashMap<>();
+        Map<String, Position> currentStoreLocation = new LinkedHashMap<>();
+        Map<String, List<Position>> assigned = new LinkedHashMap<>();
+        Map<String, Integer> deliveryCount = new HashMap<>();
+        
+        for(Agent ag : grid.agents){
+            agentSnap.put(ag.id, new Agent(ag.id, new Position(ag.pos.x, ag.pos.y)));
+            currentStoreLocation.put(ag.id, new Position(ag.pos.x, ag.pos.y));
+            assigned.put(ag.id, new ArrayList<>(Collections.singletonList(ag.pos)));
+            deliveryCount.put(ag.id, 0);
+        }
 
-    // UPDATED COMPARISON LOGIC — uses timeNanos and memory
+        Map<String, Integer> totalCost = new HashMap<>();
+        Map<String, Integer> totalExpanded = new HashMap<>();
+        Map<String, Long> totalTimeNanos = new HashMap<>();
+        Map<String, Long> totalMemoryKB = new HashMap<>();
+        Map<String, List<String>> strategiesUsed = new HashMap<>();
+        
+        for (Agent ag : grid.agents) {
+            totalCost.put(ag.id, 0);
+            totalExpanded.put(ag.id, 0);
+            totalTimeNanos.put(ag.id, 0L);
+            totalMemoryKB.put(ag.id, 0L);
+            strategiesUsed.put(ag.id, new ArrayList<>());
+        }
+
+        Set<Position> reservedDestinations = new HashSet<>();
+
+        while(reservedDestinations.size() < grid.destinations.size()){
+            Candidate best = null;
+
+            for(Position store : grid.stores){
+                Position dest = nearestAvailableDestination(grid, store, reservedDestinations);
+                if(dest == null) continue;
+
+                for(Agent ag : grid.agents){
+                    Agent snapshot = agentSnap.get(ag.id);
+
+                    // Use FIXED strategy
+                    SearchStats statsToStore = DeliverySearch.solveWithStats(grid, snapshot.pos, store, strategy);
+                    if(!statsToStore.success) continue;
+
+                    SearchStats statsToDest = DeliverySearch.solveWithStats(grid, store, dest, strategy);
+                    if(!statsToDest.success) continue;
+
+                    Candidate c = new Candidate(store, dest, 
+                        new Agent(snapshot.id, new Position(snapshot.pos.x, snapshot.pos.y)), 
+                        deliveryCount.get(ag.id));
+                    c.stratToStore = strategy; 
+                    c.stratToDest = strategy;
+                    c.statsToStore = statsToStore; 
+                    c.statsToDest = statsToDest;
+                    c.routeToStore = statsToStore.route; 
+                    c.routeToDest = statsToDest.route;
+
+                    if(best == null || combinedPrefer(c, best)) {
+                        best = c;
+                    }
+                }
+            }
+
+            if(best == null) break;
+
+            String aid = best.agentSnapshot.id;
+            List<Position> current = assigned.get(aid);
+            if(best.routeToStore != null && best.routeToStore.size() > 1){
+                for(int i=1;i<best.routeToStore.size();i++) current.add(best.routeToStore.get(i));
+            }
+            if(best.routeToDest != null && best.routeToDest.size() > 1){
+                for(int i=1;i<best.routeToDest.size();i++) current.add(best.routeToDest.get(i));
+            }
+            
+            deliveryCount.put(aid, deliveryCount.get(aid) + 1);
+            agentSnap.get(aid).pos = best.store;
+            currentStoreLocation.put(aid, best.store);
+            reservedDestinations.add(best.dest);
+
+            totalCost.merge(aid, best.statsToStore.cost + best.statsToDest.cost, Integer::sum);
+            totalExpanded.merge(aid, (int)best.combinedExpanded(), Integer::sum);
+            totalTimeNanos.merge(aid, best.statsToStore.timeNanos + best.statsToDest.timeNanos, Long::sum);
+            totalMemoryKB.merge(aid, best.combinedMem(), Long::sum);
+            strategiesUsed.get(aid).add(best.stratToStore + " + " + best.stratToDest);
+        }
+
+        Map<String, List<Position>> safe = applyCollisionAvoidance(assigned, grid);
+
+        List<Assignment> out = new ArrayList<>();
+        for(Agent ag : grid.agents){
+            List<Position> r = safe.getOrDefault(ag.id, assigned.get(ag.id));
+            List<String> actions = extractActions(r, grid);
+            SearchStats realStats = new SearchStats(
+                    true,
+                    totalCost.get(ag.id),
+                    totalExpanded.get(ag.id),
+                    totalTimeNanos.get(ag.id),
+                    totalMemoryKB.get(ag.id),
+                    r,
+                    actions
+            );
+            String strategyStr = strategiesUsed.getOrDefault(ag.id, new ArrayList<>()).isEmpty() 
+                ? strategy 
+                : String.join(" | ", strategiesUsed.get(ag.id));
+            out.add(new Assignment(new Agent(ag.id, ag.pos), r, strategyStr, realStats, deliveryCount.get(ag.id)));
+        }
+
+        return out;
+    }
+    
+    /**
+     * ✅ SPECIFICATION FIX: Extract action sequence including TUNNEL actions
+     * Format: "up,down,left,tunnel,right" as specified
+     */
+    private static List<String> extractActions(List<Position> route, Grid grid) {
+        List<String> actions = new ArrayList<>();
+        for (int i = 1; i < route.size(); i++) {
+            Position prev = route.get(i - 1);
+            Position curr = route.get(i);
+            
+            // Check if this is a tunnel move (non-adjacent positions)
+            int dx = Math.abs(curr.x - prev.x);
+            int dy = Math.abs(curr.y - prev.y);
+            
+            if (dx > 1 || dy > 1) {
+                // This is a tunnel move
+                actions.add("tunnel");
+            } else if (curr.x > prev.x) {
+                actions.add("right");
+            } else if (curr.x < prev.x) {
+                actions.add("left");
+            } else if (curr.y > prev.y) {
+                actions.add("down");
+            } else if (curr.y < prev.y) {
+                actions.add("up");
+            }
+        }
+        return actions;
+    }
+
     private static boolean prefer(SearchStats a, SearchStats b){
         if(a.expanded != b.expanded) return a.expanded < b.expanded;
         if(a.timeNanos != b.timeNanos) return a.timeNanos < b.timeNanos;
@@ -225,6 +365,20 @@ public class DeliveryPlanner {
     }
 
     private static boolean combinedPrefer(Candidate A, Candidate B){
+        // Workload balancing: prefer less loaded agent when cost difference is small
+        if(A.agentDeliveryCount != B.agentDeliveryCount) {
+            int costA = A.totalCost();
+            int costB = B.totalCost();
+            int maxCost = Math.max(costA, costB);
+            int minCost = Math.min(costA, costB);
+            
+            // If cost difference is within 20%, prefer agent with fewer deliveries
+            if(maxCost == 0 || (maxCost - minCost) * 100 / maxCost <= 20) {
+                return A.agentDeliveryCount < B.agentDeliveryCount;
+            }
+        }
+        
+        // Standard cost-based comparison
         long expA = A.combinedExpanded(), expB = B.combinedExpanded();
         if(expA != expB) return expA < expB;
         long timeA = A.statsToStore.timeNanos + A.statsToDest.timeNanos;
