@@ -69,7 +69,6 @@ public abstract class GenericSearch {
             for (String op : problem.operators()) {
                 Object s2 = problem.apply(node.state, op);
                 if (s2 == null) continue;
-                // Redundant state elimination: don't add if already explored or in frontier
                 if (explored.contains(s2) || inFrontier.contains(s2)) continue;
                 Node child = new Node(s2, node, op, problem.stepCost(node.state, op));
                 frontier.add(child);
