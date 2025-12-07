@@ -5,11 +5,6 @@ import java.util.*;
 
 /**
  * DeliveryPlanner - Plans delivery routes for multiple agents
- * 
- * SPECIFICATION COMPLIANCE:
- * - Plans which trucks deliver which products
- * - Each truck returns to store after delivery before next assignment
- * - Coordinates overall delivery strategy
  */
 public class DeliveryPlanner {
 
@@ -226,7 +221,6 @@ public class DeliveryPlanner {
                 for(int i=1;i<best.routeToDest.size();i++) current.add(best.routeToDest.get(i));
             }
             
-            // ✅ SPECIFICATION FIX: Truck returns to store after delivery
             deliveryCount.put(aid, deliveryCount.get(aid) + 1);
             agentSnap.get(aid).pos = best.store;  // Return to store (not initial position)
             currentStoreLocation.put(aid, best.store);
@@ -277,11 +271,7 @@ public class DeliveryPlanner {
 
         return out;
     }
-    
-    /**
-     * ✅ SPECIFICATION COMPLIANCE: Plan with specific strategy
-     * Allows strategy to be passed from plan() method
-     */
+
     public static List<Assignment> planMultiDeliveryWithStrategy(Grid grid, String strategy) {
         if ("AUTO".equals(strategy)) {
             return planMultiDelivery(grid);  // Use automatic strategy selection
@@ -292,7 +282,7 @@ public class DeliveryPlanner {
     }
     
     /**
-     * Plan multi-delivery using a fixed strategy (not AUTO)
+     * Plan multi-delivery using a fixed strategy
      */
     private static List<Assignment> planMultiDeliveryFixed(Grid grid, String strategy) {
         Map<String, Agent> agentSnap = new LinkedHashMap<>();
@@ -335,7 +325,7 @@ public class DeliveryPlanner {
                 for(Agent ag : grid.agents){
                     Agent snapshot = agentSnap.get(ag.id);
 
-                    // Test all strategies for comparison (even though we'll use the specified one)
+                    // Test all strategies for comparison
                     String[] strategies = {"BFS","DFS","UCS","IDS","GREEDY","GREEDY2","ASTAR","ASTAR2"};
                     List<AlgorithmResult> storeResults = new ArrayList<>();
                     SearchStats statsToStore = null;
@@ -435,11 +425,6 @@ public class DeliveryPlanner {
 
         return out;
     }
-    
-    /**
-     * ✅ SPECIFICATION FIX: Extract action sequence including TUNNEL actions
-     * Format: "up,down,left,tunnel,right" as specified
-     */
     private static List<String> extractActions(List<Position> route, Grid grid) {
         List<String> actions = new ArrayList<>();
         for (int i = 1; i < route.size(); i++) {
@@ -451,7 +436,6 @@ public class DeliveryPlanner {
             int dy = Math.abs(curr.y - prev.y);
             
             if (dx > 1 || dy > 1) {
-                // This is a tunnel move
                 actions.add("tunnel");
             } else if (curr.x > prev.x) {
                 actions.add("right");
