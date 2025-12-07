@@ -32,17 +32,29 @@ public class Main {
             Position firstDest = grid.destinations.get(0);
 
             System.out.println("   Finding path from " + firstAgent.pos + " to " + firstDest);
+            System.out.println("   ┌─────────────────┬──────┬────────┬──────────────┬──────────────┐");
+            System.out.println("   │ Algorithm       │ Cost │ Nodes  │ Time         │ Memory       │");
+            System.out.println("   ├─────────────────┼──────┼────────┼──────────────┼──────────────┤");
 
-            String[] strategiesToTest = {"BFS", "UCS", "ASTAR"};
+            String[] strategiesToTest = {"BFS", "DFS", "UCS", "IDS", "GREEDY", "GREEDY2", "ASTAR", "ASTAR2"};
             for (String strat : strategiesToTest) {
-                String result = DeliverySearch.path(grid, firstAgent.pos, firstDest, strat);
-                String[] parts = result.split(";");
-                if (parts.length >= 3) {
-                    System.out.println("   " + strat + ": cost=" + parts[1] +
-                                     ", nodes=" + parts[2] +
-                                     ", actions=" + (parts[0].isEmpty() ? 0 : parts[0].split(",").length));
+                SearchStats stats = DeliverySearch.solveWithStats(grid, firstAgent.pos, firstDest, strat);
+                String displayName = strat;
+                if (strat.equals("GREEDY")) displayName = "GREEDY (H1)";
+                else if (strat.equals("GREEDY2")) displayName = "GREEDY (H2)";
+                else if (strat.equals("ASTAR")) displayName = "ASTAR (H1)";
+                else if (strat.equals("ASTAR2")) displayName = "ASTAR (H2)";
+                
+                if (stats.success) {
+                    System.out.printf("   │ %-15s │ %4d │ %6d │ %12s │ %10dKB │%n", 
+                        displayName, stats.cost, stats.expanded, 
+                        SearchStats.formatTime(stats.timeNanos),
+                        stats.memoryUsedBytes / 1024);
+                } else {
+                    System.out.printf("   │ %-15s │ FAILED TO FIND SOLUTION           │%n", displayName);
                 }
             }
+            System.out.println("   └─────────────────┴──────┴────────┴──────────────┴──────────────┘");
             System.out.println("   path() method working correctly\n");
         }
 
@@ -80,13 +92,63 @@ public class Main {
         int totalSteps = 0;
 
         for (DeliveryPlanner.Assignment a : assignments) {
-            System.out.println("Agent " + a.agent.id + ":");
-            System.out.println("  Start: " + a.agent.pos);
-            System.out.println("  Deliveries completed: " + a.deliveriesCompleted);
-            System.out.println("  Total cost: " + a.stats.cost);
-            System.out.println("  Nodes expanded: " + a.stats.expanded);
-            System.out.println("  Strategies: " + a.strategy);
-            System.out.println("  Actions: " + formatActions(a.stats.actions));
+            System.out.println("╔═══════════════════════════════════════════════════════════╗");
+            System.out.println("║  AGENT " + a.agent.id + " - Performance Report");
+            System.out.println("╚═══════════════════════════════════════════════════════════╝");
+            System.out.println("  Start Position: " + a.agent.pos);
+            System.out.println("  Deliveries Completed: " + a.deliveriesCompleted);
+            System.out.println();
+            
+            // Display detailed algorithm comparison for each leg
+            if (!a.legs.isEmpty()) {
+                System.out.println("  Detailed Algorithm Comparisons by Leg:");
+                System.out.println("  ═══════════════════════════════════════════════════════════");
+                
+                for (DeliveryPlanner.DeliveryLeg leg : a.legs) {
+                    System.out.println();
+                    System.out.println("  Leg " + leg.legNumber + ": " + leg.legType + " (" + leg.start + " → " + leg.end + ")");
+                    System.out.println("  ┌─────────────────┬──────┬────────┬──────────────┬──────────────┬────────┐");
+                    System.out.println("  │ Algorithm       │ Cost │ Nodes  │ Time         │ Memory       │ Status │");
+                    System.out.println("  ├─────────────────┼──────┼────────┼──────────────┼──────────────┼────────┤");
+                    
+                    for (DeliveryPlanner.AlgorithmResult result : leg.algorithmResults) {
+                        String status = result.chosen ? " ✓ " : "   ";
+                        String algoName = result.algorithm;
+                        // Add heuristic labels
+                        if (algoName.equals("GREEDY")) algoName = "GREEDY (H1)";
+                        else if (algoName.equals("GREEDY2")) algoName = "GREEDY (H2)";
+                        else if (algoName.equals("ASTAR")) algoName = "ASTAR (H1)";
+                        else if (algoName.equals("ASTAR2")) algoName = "ASTAR (H2)";
+                        
+                        System.out.printf("  │ %-15s │ %4d │ %6d │ %12s │ %10dKB │  %s  │%n",
+                            algoName, 
+                            result.stats.cost,
+                            result.stats.expanded,
+                            SearchStats.formatTime(result.stats.timeNanos),
+                            result.stats.memoryUsedBytes / 1024,
+                            status);
+                    }
+                    
+                    System.out.println("  └─────────────────┴──────┴────────┴──────────────┴──────────────┴────────┘");
+                    
+                    // Show which heuristic was chosen
+                    String chosenDisplay = leg.chosenAlgorithm;
+                    if (chosenDisplay.equals("GREEDY")) chosenDisplay = "GREEDY (H1: tunnelAware)";
+                    else if (chosenDisplay.equals("GREEDY2")) chosenDisplay = "GREEDY (H2: deliveryAdmissible)";
+                    else if (chosenDisplay.equals("ASTAR")) chosenDisplay = "ASTAR (H1: tunnelAware)";
+                    else if (chosenDisplay.equals("ASTAR2")) chosenDisplay = "ASTAR (H2: deliveryAdmissible)";
+                    System.out.println("  Chosen: " + chosenDisplay);
+                }
+                System.out.println();
+            }
+            
+            System.out.println("  Aggregate Statistics for Agent:");
+            System.out.println("    Total cost: " + a.stats.cost);
+            System.out.println("    Nodes expanded: " + a.stats.expanded);
+            System.out.println("    Time consumed: " + SearchStats.formatTime(a.stats.timeNanos));
+            System.out.println("    Memory used: " + (a.stats.memoryUsedBytes / 1024) + "KB");
+            System.out.println("    Total actions: " + a.stats.actions.size());
+            System.out.println("    Action sequence: " + formatActions(a.stats.actions));
             System.out.println();
 
             routes.put(a.agent, a.route);

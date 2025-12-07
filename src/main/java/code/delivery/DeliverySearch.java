@@ -31,11 +31,19 @@ public class DeliverySearch extends GenericSearch {
 
     public static SearchResult solveInternal(Grid grid, Position start, Position goal, String strat){
         DeliveryProblem problem = new DeliveryProblem(grid, start, goal);
-        SearchStrategy s;
-        try { s = SearchStrategy.valueOf(strat.toUpperCase()); }
-        catch(Exception ex){ return null; }
-
-        GenericSearch.Result res = GenericSearch.generalSearch(problem, s);
+        
+        // Handle heuristic variants (GREEDY2, ASTAR2 use heuristic 2)
+        GenericSearch.Result res;
+        if(strat.equalsIgnoreCase("GREEDY2")) {
+            res = GenericSearch.greedy(problem, 2);
+        } else if(strat.equalsIgnoreCase("ASTAR2")) {
+            res = GenericSearch.aStar(problem, 2);
+        } else {
+            SearchStrategy s;
+            try { s = SearchStrategy.valueOf(strat.toUpperCase()); }
+            catch(Exception ex){ return null; }
+            res = GenericSearch.generalSearch(problem, s);
+        }
 
         if(res.node == null) return new SearchResult(null, Integer.MAX_VALUE, res.nodesExpanded, Collections.emptyList());
 
@@ -231,7 +239,6 @@ public class DeliverySearch extends GenericSearch {
             // Parse world from string format  
             Grid grid = WorldParser.parseGridString(initialState);
             
-            // ✅ FIXED: Use multi-agent planner WITH strategy parameter
             List<DeliveryPlanner.Assignment> assignments = DeliveryPlanner.planMultiDeliveryWithStrategy(grid, strategy);
             
             // Build result string from assignments

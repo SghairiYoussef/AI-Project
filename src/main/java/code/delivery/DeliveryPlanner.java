@@ -13,19 +13,55 @@ import java.util.*;
  */
 public class DeliveryPlanner {
 
+    public static class AlgorithmResult {
+        public final String algorithm;
+        public final SearchStats stats;
+        public final boolean chosen;
+        
+        public AlgorithmResult(String algo, SearchStats st, boolean chosen) {
+            this.algorithm = algo;
+            this.stats = st;
+            this.chosen = chosen;
+        }
+    }
+    
+    public static class DeliveryLeg {
+        public final int legNumber;
+        public final Position start;
+        public final Position end;
+        public final String legType; // "to-store" or "to-destination"
+        public final List<AlgorithmResult> algorithmResults;
+        public final String chosenAlgorithm;
+        
+        public DeliveryLeg(int num, Position s, Position e, String type, List<AlgorithmResult> results, String chosen) {
+            this.legNumber = num;
+            this.start = s;
+            this.end = e;
+            this.legType = type;
+            this.algorithmResults = results;
+            this.chosenAlgorithm = chosen;
+        }
+    }
+
     public static class Assignment {
         public final Agent agent;
         public final List<Position> route;
         public final String strategy;
         public final SearchStats stats;
         public final int deliveriesCompleted;
+        public final List<DeliveryLeg> legs;
         
         public Assignment(Agent a, List<Position> r, String strat, SearchStats st, int deliveries){ 
+            this(a, r, strat, st, deliveries, new ArrayList<>());
+        }
+        
+        public Assignment(Agent a, List<Position> r, String strat, SearchStats st, int deliveries, List<DeliveryLeg> legs){ 
             this.agent=a; 
             this.route=r; 
             this.strategy=strat; 
             this.stats=st; 
             this.deliveriesCompleted = deliveries;
+            this.legs = legs;
         }
         public String strategySummary(){ return strategy + " | stats=" + stats; }
     }
@@ -41,6 +77,8 @@ public class DeliveryPlanner {
         List<Position> routeToStore;
         List<Position> routeToDest;
         int agentDeliveryCount;
+        List<AlgorithmResult> storeAlgoResults;
+        List<AlgorithmResult> destAlgoResults;
 
         Candidate(Position store, Position dest, Agent agentSnapshot, int deliveryCount){
             this.store = store; 
@@ -86,6 +124,7 @@ public class DeliveryPlanner {
         Map<String, Long> totalTimeNanos = new HashMap<>();
         Map<String, Long> totalMemoryKB = new HashMap<>();
         Map<String, List<String>> strategiesUsed = new HashMap<>();
+        Map<String, List<DeliveryLeg>> agentLegs = new HashMap<>();
         
         for (Agent ag : grid.agents) {
             totalCost.put(ag.id, 0);
@@ -93,6 +132,7 @@ public class DeliveryPlanner {
             totalTimeNanos.put(ag.id, 0L);
             totalMemoryKB.put(ag.id, 0L);
             strategiesUsed.put(ag.id, new ArrayList<>());
+            agentLegs.put(ag.id, new ArrayList<>());
         }
 
         Set<Position> reservedDestinations = new HashSet<>();
@@ -111,28 +151,48 @@ public class DeliveryPlanner {
 
                     // Leg 1: agent -> store
                     // Test all strategies and select best
-                    String[] strategies = {"BFS","DFS","UCS","IDS","GREEDY","ASTAR"};
+                    String[] strategies = {"BFS","DFS","UCS","IDS","GREEDY","GREEDY2","ASTAR","ASTAR2"};
+                    List<AlgorithmResult> storeResults = new ArrayList<>();
                     SearchStats bestStoreStats = null; 
                     String bestStoreStrat = null;
                     for(String s : strategies){
                         SearchStats st = DeliverySearch.solveWithStats(grid, snapshot.pos, store, s);
                         if(!st.success) continue;
-                        if(bestStoreStats == null || prefer(st, bestStoreStats)){
+                        boolean isBest = bestStoreStats == null || prefer(st, bestStoreStats);
+                        if(isBest){
                             bestStoreStats = st; bestStoreStrat = s;
                         }
+                        storeResults.add(new AlgorithmResult(s, st, false)); // Will mark chosen later
                     }
                     if(bestStoreStats == null) continue;
+                    
+                    // Mark the chosen algorithm
+                    for(int i = 0; i < storeResults.size(); i++) {
+                        if(storeResults.get(i).algorithm.equals(bestStoreStrat)) {
+                            storeResults.set(i, new AlgorithmResult(bestStoreStrat, bestStoreStats, true));
+                        }
+                    }
 
+                    List<AlgorithmResult> destResults = new ArrayList<>();
                     SearchStats bestDestStats = null; 
                     String bestDestStrat = null;
                     for(String s : strategies){
                         SearchStats st = DeliverySearch.solveWithStats(grid, store, dest, s);
                         if(!st.success) continue;
-                        if(bestDestStats == null || prefer(st, bestDestStats)){
+                        boolean isBest = bestDestStats == null || prefer(st, bestDestStats);
+                        if(isBest){
                             bestDestStats = st; bestDestStrat = s;
                         }
+                        destResults.add(new AlgorithmResult(s, st, false)); // Will mark chosen later
                     }
                     if(bestDestStats == null) continue;
+                    
+                    // Mark the chosen algorithm
+                    for(int i = 0; i < destResults.size(); i++) {
+                        if(destResults.get(i).algorithm.equals(bestDestStrat)) {
+                            destResults.set(i, new AlgorithmResult(bestDestStrat, bestDestStats, true));
+                        }
+                    }
 
                     Candidate c = new Candidate(store, dest, 
                         new Agent(snapshot.id, new Position(snapshot.pos.x, snapshot.pos.y)), 
@@ -143,6 +203,10 @@ public class DeliveryPlanner {
                     c.statsToDest = bestDestStats;
                     c.routeToStore = bestStoreStats.route; 
                     c.routeToDest = bestDestStats.route;
+                    
+                    // Store algorithm test results for this candidate
+                    c.storeAlgoResults = storeResults;
+                    c.destAlgoResults = destResults;
 
                     if(best == null || combinedPrefer(c, best)) {
                         best = c;
@@ -175,6 +239,16 @@ public class DeliveryPlanner {
             totalMemoryKB.merge(aid, best.combinedMem(), Long::sum);
             
             strategiesUsed.get(aid).add(best.stratToStore + " + " + best.stratToDest);
+            
+            // Record delivery legs with algorithm test results
+            List<DeliveryLeg> legs = agentLegs.get(aid);
+            int legNum = legs.size();
+            
+            Position agentPos = best.agentSnapshot.pos;
+            legs.add(new DeliveryLeg(legNum + 1, agentPos, best.store, 
+                "to-store", best.storeAlgoResults, best.stratToStore));
+            legs.add(new DeliveryLeg(legNum + 2, best.store, best.dest, 
+                "to-destination", best.destAlgoResults, best.stratToDest));
         }
 
         // Collision avoidance
@@ -197,7 +271,8 @@ public class DeliveryPlanner {
             String strategyStr = strategiesUsed.getOrDefault(ag.id, new ArrayList<>()).isEmpty() 
                 ? "AUTO" 
                 : String.join(" | ", strategiesUsed.get(ag.id));
-            out.add(new Assignment(new Agent(ag.id, ag.pos), r, strategyStr, realStats, deliveryCount.get(ag.id)));
+            List<DeliveryLeg> legs = agentLegs.getOrDefault(ag.id, new ArrayList<>());
+            out.add(new Assignment(new Agent(ag.id, ag.pos), r, strategyStr, realStats, deliveryCount.get(ag.id), legs));
         }
 
         return out;
@@ -237,6 +312,7 @@ public class DeliveryPlanner {
         Map<String, Long> totalTimeNanos = new HashMap<>();
         Map<String, Long> totalMemoryKB = new HashMap<>();
         Map<String, List<String>> strategiesUsed = new HashMap<>();
+        Map<String, List<DeliveryLeg>> agentLegs = new HashMap<>();
         
         for (Agent ag : grid.agents) {
             totalCost.put(ag.id, 0);
@@ -244,6 +320,7 @@ public class DeliveryPlanner {
             totalTimeNanos.put(ag.id, 0L);
             totalMemoryKB.put(ag.id, 0L);
             strategiesUsed.put(ag.id, new ArrayList<>());
+            agentLegs.put(ag.id, new ArrayList<>());
         }
 
         Set<Position> reservedDestinations = new HashSet<>();
@@ -258,12 +335,31 @@ public class DeliveryPlanner {
                 for(Agent ag : grid.agents){
                     Agent snapshot = agentSnap.get(ag.id);
 
-                    // Use FIXED strategy
-                    SearchStats statsToStore = DeliverySearch.solveWithStats(grid, snapshot.pos, store, strategy);
-                    if(!statsToStore.success) continue;
+                    // Test all strategies for comparison (even though we'll use the specified one)
+                    String[] strategies = {"BFS","DFS","UCS","IDS","GREEDY","GREEDY2","ASTAR","ASTAR2"};
+                    List<AlgorithmResult> storeResults = new ArrayList<>();
+                    SearchStats statsToStore = null;
+                    
+                    for(String s : strategies){
+                        SearchStats st = DeliverySearch.solveWithStats(grid, snapshot.pos, store, s);
+                        if(!st.success) continue;
+                        boolean isChosen = s.equals(strategy);
+                        storeResults.add(new AlgorithmResult(s, st, isChosen));
+                        if(isChosen) statsToStore = st;
+                    }
+                    if(statsToStore == null) continue;
 
-                    SearchStats statsToDest = DeliverySearch.solveWithStats(grid, store, dest, strategy);
-                    if(!statsToDest.success) continue;
+                    List<AlgorithmResult> destResults = new ArrayList<>();
+                    SearchStats statsToDest = null;
+                    
+                    for(String s : strategies){
+                        SearchStats st = DeliverySearch.solveWithStats(grid, store, dest, s);
+                        if(!st.success) continue;
+                        boolean isChosen = s.equals(strategy);
+                        destResults.add(new AlgorithmResult(s, st, isChosen));
+                        if(isChosen) statsToDest = st;
+                    }
+                    if(statsToDest == null) continue;
 
                     Candidate c = new Candidate(store, dest, 
                         new Agent(snapshot.id, new Position(snapshot.pos.x, snapshot.pos.y)), 
@@ -274,6 +370,8 @@ public class DeliveryPlanner {
                     c.statsToDest = statsToDest;
                     c.routeToStore = statsToStore.route; 
                     c.routeToDest = statsToDest.route;
+                    c.storeAlgoResults = storeResults;
+                    c.destAlgoResults = destResults;
 
                     if(best == null || combinedPrefer(c, best)) {
                         best = c;
@@ -302,6 +400,15 @@ public class DeliveryPlanner {
             totalTimeNanos.merge(aid, best.statsToStore.timeNanos + best.statsToDest.timeNanos, Long::sum);
             totalMemoryKB.merge(aid, best.combinedMem(), Long::sum);
             strategiesUsed.get(aid).add(best.stratToStore + " + " + best.stratToDest);
+            
+            // Record delivery legs with algorithm test results
+            List<DeliveryLeg> legs = agentLegs.get(aid);
+            int legNum = legs.size();
+            Position agentPos = best.agentSnapshot.pos;
+            legs.add(new DeliveryLeg(legNum + 1, agentPos, best.store, 
+                "to-store", best.storeAlgoResults, best.stratToStore));
+            legs.add(new DeliveryLeg(legNum + 2, best.store, best.dest, 
+                "to-destination", best.destAlgoResults, best.stratToDest));
         }
 
         Map<String, List<Position>> safe = applyCollisionAvoidance(assigned, grid);
@@ -322,7 +429,8 @@ public class DeliveryPlanner {
             String strategyStr = strategiesUsed.getOrDefault(ag.id, new ArrayList<>()).isEmpty() 
                 ? strategy 
                 : String.join(" | ", strategiesUsed.get(ag.id));
-            out.add(new Assignment(new Agent(ag.id, ag.pos), r, strategyStr, realStats, deliveryCount.get(ag.id)));
+            List<DeliveryLeg> legs = agentLegs.getOrDefault(ag.id, new ArrayList<>());
+            out.add(new Assignment(new Agent(ag.id, ag.pos), r, strategyStr, realStats, deliveryCount.get(ag.id), legs));
         }
 
         return out;
